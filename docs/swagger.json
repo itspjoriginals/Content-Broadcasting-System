@@ -15,7 +15,7 @@
       "description": "Local Development"
     },
     {
-      "url": "https://your-production-domain.com/api",
+      "url": "https://content-broadcasting-system-production-6a4f.up.railway.app/api",
       "description": "Production"
     }
   ],
