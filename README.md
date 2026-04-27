@@ -32,7 +32,7 @@ A production-ready backend system for distributing subject-based educational con
 ### 1. Clone & Install
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/itspjoriginals/Content-Broadcasting-System.git
 cd content-broadcasting-system
 npm install
 ```
