@@ -1,0 +1,273 @@
+================================================================================
+  CONTENT BROADCASTING SYSTEM — ARCHITECTURE NOTES
+================================================================================
+
+Author : Prashant Kumar Jha (itspjprashant@gmail.com)
+Stack  : Node.js + Express, MySQL, Redis, JWT, Multer, bcryptjs
+Date   : 26th April 2026
+
+────────────────────────────────────────────────────────────────────────────────
+1. AUTHENTICATION & RBAC FLOW
+────────────────────────────────────────────────────────────────────────────────
+
+Authentication uses stateless JWT (JSON Web Tokens):
+
+  POST /api/auth/login
+    → validate credentials → bcrypt.compare(password, hash)
+    → sign JWT { id, role } with HS256 (secret from env)
+    → return token to client
+
+Protected Routes:
+  Every private route passes through `authenticate` middleware:
+    1. Extract Bearer token from Authorization header
+    2. jwt.verify() — checks signature + expiry
+    3. Fetch fresh user row from DB (catches deactivated accounts mid-session)
+    4. Attach to req.user
+
+RBAC is enforced by the `authorize(...roles)` middleware factory:
+  - authorize('principal')  → only principal can approve/reject
+  - authorize('teacher')    → only teachers can upload
+  - authorize('principal','teacher') → both (e.g., list content)
+
+Role separation:
+  PRINCIPAL: view all content, approve, reject, list teachers
+  TEACHER:   upload content, view own content
+
+Password Storage:
+  bcrypt with 12 salt rounds (OWASP recommended minimum for 2024+).
+  Raw passwords never logged or stored.
+
+────────────────────────────────────────────────────────────────────────────────
+2. SUBJECT-BASED SYSTEM DESIGN
+────────────────────────────────────────────────────────────────────────────────
+
+Subjects are free-form strings normalized to lowercase. This avoids a rigid
+enum and allows the system to expand (Maths, Science, History, etc.) without
+schema changes.
+
+Each (teacher, subject) pair maps to a `content_slots` row (unique key).
+This slot acts as the "channel" for a subject under a teacher.
+
+Content is attached to a slot via `content_schedule`, which stores:
+  - rotation_order: determines sequence
+  - duration: how many minutes this item occupies per rotation cycle
+
+────────────────────────────────────────────────────────────────────────────────
+3. UPLOAD HANDLING APPROACH
+────────────────────────────────────────────────────────────────────────────────
+
+Multer handles multipart/form-data uploads:
+  - diskStorage writes files to src/uploads/images/
+  - UUID-based filenames prevent collisions and avoid path traversal
+  - fileFilter rejects non-allowed MIME types before disk write
+  - fileSize limit enforced in multer config (not just client-side)
+
+File URL is built as: BASE_URL + /uploads/ + filename
+File path on disk stored separately for cleanup on delete/reject.
+
+If DB insert fails after file is written, orphaned file is deleted immediately
+inside the transaction catch block.
+
+S3 Bonus: Replace diskStorage with multer-s3 and update file_url to S3 public URL.
+
+────────────────────────────────────────────────────────────────────────────────
+4. APPROVAL WORKFLOW DESIGN
+────────────────────────────────────────────────────────────────────────────────
+
+Content Lifecycle:
+
+  uploaded → pending (on upload)
+           → approved (principal action) → content becomes eligible for broadcast
+           → rejected (principal action, reason required)
+
+State machine rules (enforced in service layer):
+  - Only 'pending' content can be approved or rejected
+  - Rejection MUST include a reason (validated at route level)
+  - approved_by and approved_at are recorded for audit trail
+  - Approval busts the Redis live-cache for that teacher immediately
+
+────────────────────────────────────────────────────────────────────────────────
+5. SCHEDULING / ROTATION LOGIC (MOST IMPORTANT)
+────────────────────────────────────────────────────────────────────────────────
+
+Problem: Given multiple approved content items for a subject, determine which
+one is "live" at the current moment without persisting any rotation state.
+
+Solution: Deterministic Time-Based Rotation
+
+  Key insight: If we define a fixed "anchor" point (the earliest start_time
+  among active items in the group) and a total cycle length (sum of all
+  durations), we can always compute the active item from first principles
+  using only the current time.
+
+  Algorithm (resolveActiveItem):
+
+    1. anchor = min(start_time) across all active items in subject group
+    2. totalCycleMs = Σ (duration_i × 60,000) for all items in group
+    3. elapsed = (now - anchor) mod totalCycleMs
+       → elapsed is our position within the current cycle
+    4. Walk items in rotation_order ASC:
+         cursor = 0
+         for each item:
+           if cursor <= elapsed < cursor + item.durationMs → ACTIVE item found
+           cursor += item.durationMs
+    5. Return the active item
+
+  Properties of this approach:
+    ✓ STATELESS     — no Redis/DB write needed per request
+    ✓ DETERMINISTIC — multiple server replicas always agree
+    ✓ RESTART-SAFE  — anchor is derived from DB timestamps, not uptime
+    ✓ LOOP          — modulo arithmetic ensures continuous looping
+    ✓ INDEPENDENT   — each subject has its own independent cycle
+
+  Scheduling constraints respected:
+    - Only content with start_time ≤ NOW AND end_time ≥ NOW is included
+    - Content without start/end times is excluded (inactive per spec)
+    - Each subject rotates independently
+
+  Edge cases:
+    - Single item     → stays active for its duration, then loops
+    - No active items → null returned → "No content available"
+    - Items added mid-cycle → rotation_order appended → included on next cycle
+
+  Example (Maths — 3 items, durations 5/5/5 min, anchor = T):
+    T+0..5   → Item A active
+    T+5..10  → Item B active
+    T+10..15 → Item C active
+    T+15..20 → Item A again (loop)
+
+────────────────────────────────────────────────────────────────────────────────
+6. DATABASE DESIGN DECISIONS
+────────────────────────────────────────────────────────────────────────────────
+
+Tables: users, content, content_slots, content_schedule
+
+users:
+  - UUID primary keys (no sequential ID leakage, safe for public endpoints)
+  - is_active flag for soft-deactivation without data loss
+  - Indexed on email (login lookup) and role (filter queries)
+
+content:
+  - Denormalized file metadata (type, size, path, url) for direct serving
+  - Separate file_url (public URL) and file_path (disk path) for clean separation
+  - Composite index on (status, start_time, end_time) for scheduling query
+  - rejection_reason nullable (only set on rejection)
+
+content_slots:
+  - Models the concept of a "channel" per (teacher, subject)
+  - UNIQUE KEY (teacher_id, subject) prevents duplicate channels
+  - Used as the FK anchor for content_schedule
+
+content_schedule:
+  - One row per content item (enforced by UNIQUE KEY on content_id)
+  - rotation_order INT allows re-ordering without gap management
+  - duration stored per item (not on content) for flexible rotation
+
+All foreign keys use explicit ON DELETE behavior:
+  - CASCADE where child rows are meaningless without parent
+  - RESTRICT on uploaded_by (preserve audit trail)
+  - SET NULL on approved_by (preserve content if approver is removed)
+
+All tables: ENGINE=InnoDB, utf8mb4 charset for full Unicode support.
+
+────────────────────────────────────────────────────────────────────────────────
+7. FOLDER STRUCTURE
+────────────────────────────────────────────────────────────────────────────────
+
+src/
+├── config/
+│   ├── database.js     — MySQL pool initialization & query helpers
+│   ├── multer.js       — Multer storage config, file filter, size limit
+│   └── redis.js        — Redis client, cacheGet/Set/Del helpers
+│
+├── controllers/
+│   ├── auth.controller.js      — Login, register, /me
+│   ├── content.controller.js   — Upload, list, approve, reject, delete
+│   ├── broadcast.controller.js — Public live endpoints
+│   └── user.controller.js      — Teacher list, profile
+│
+├── middlewares/
+│   ├── auth.middleware.js      — authenticate (JWT) + authorize (RBAC)
+│   ├── validate.middleware.js  — express-validator error collector
+│   ├── error.middleware.js     — Global error + 404 handler
+│   └── rateLimit.middleware.js — Public + private rate limiters
+│
+├── routes/
+│   ├── auth.routes.js
+│   ├── content.routes.js
+│   ├── broadcast.routes.js
+│   └── user.routes.js
+│
+├── services/
+│   ├── auth.service.js         — Registration, login, token generation
+│   ├── content.service.js      — CRUD, approval workflow, file cleanup
+│   └── schedule.service.js     — Rotation algorithm (core business logic)
+│
+├── utils/
+│   ├── logger.js       — Winston logger (file + console)
+│   ├── response.js     — Standardized JSON response helpers
+│   ├── migrate.js      — Schema migration runner
+│   └── seed.js         — Default principal + demo teacher seeding
+│
+├── uploads/images/     — Local file storage (gitignored)
+├── app.js              — Express app configuration
+└── server.js           — Entry point, graceful shutdown
+
+────────────────────────────────────────────────────────────────────────────────
+8. MIDDLEWARE USAGE
+────────────────────────────────────────────────────────────────────────────────
+
+Middleware stack (in order):
+
+  helmet          → Sets secure HTTP headers (XSS, clickjacking, MIME sniff)
+  cors            → Configurable origin whitelist
+  compression     → Gzip responses for bandwidth reduction
+  morgan          → HTTP request logging (writes to Winston)
+  express.json    → Parse JSON request bodies (1MB limit)
+  express.static  → Serve uploaded files from /uploads path
+
+Per-route:
+  privateLimiter  → Rate-limit authenticated API calls
+  publicLimiter   → Stricter limit on public broadcast endpoints
+  authenticate    → JWT verification + DB user fetch
+  authorize(role) → RBAC enforcement
+  upload.single   → Multer file parsing (content upload only)
+  [...validators] → express-validator chains
+  validate        → Collect and return validation errors
+
+Error:
+  errorHandler    → Global catch (Multer errors, DB errors, generic 500)
+  notFoundHandler → 404 for undefined routes
+
+────────────────────────────────────────────────────────────────────────────────
+9. SCALABILITY APPROACH
+────────────────────────────────────────────────────────────────────────────────
+
+CACHING (Redis):
+  - Live broadcast endpoint cached with 10-second TTL per teacher
+  - Short TTL ensures rotation feels real-time while cutting DB load dramatically
+  - Cache busted on approval/rejection to reflect state changes immediately
+  - All cache operations are fire-and-forget (never fail the request on cache miss)
+
+RATE LIMITING:
+  - Public endpoints: 100 req/15min per IP (student polling)
+  - Private endpoints: 200 req/15min per IP (teacher/principal operations)
+  - Prevents abuse and scraping
+
+STATELESS JWT:
+  - No session store needed; scales horizontally without sticky sessions
+  - Any replica can verify any token
+
+DB POOLING:
+  - mysql2 connection pool (20 connections) reuses connections across requests
+  - keepAlive enabled to prevent idle connection drops
+
+FUTURE SCALING:
+  - Replace local disk storage with S3/CloudFront (served via CDN)
+  - Use Redis cluster for cache HA
+  - Introduce a message queue (BullMQ/SQS) for approval notification emails
+  - Add pagination on all list endpoints (already implemented)
+  - Read replica for broadcast queries (high-read, low-write pattern)
+  - Docker + K8s ready: environment-driven config, graceful shutdown, health check
+
+================================================================================

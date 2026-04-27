@@ -1,0 +1,1485 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Content Broadcasting System API",
+    "description": "Production-grade backend API for distributing subject-based educational content\nfrom teachers to students via a public broadcast endpoint, with a principal-controlled\napproval workflow.\n\n## Roles\n| Role | Permissions |\n|------|-------------|\n| **Principal** | View all content, approve, reject, list teachers |\n| **Teacher** | Upload content, view own content, delete own content |\n| **Student (Public)** | Read-only access to live broadcast endpoints |\n\n## Content Lifecycle\n```\nUpload → pending → approved → [live if within time window]\n                 → rejected  (reason stored)\n```\n\n## Authentication\nAll private endpoints require `Authorization: Bearer <token>`.\nObtain token via `POST /auth/login`.\n",
+    "version": "1.0.0",
+    "contact": {
+      "name": "API Support",
+      "email": "dev@school.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000/api",
+      "description": "Local Development"
+    },
+    {
+      "url": "https://your-production-domain.com/api",
+      "description": "Production"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Auth",
+      "description": "Authentication & session management"
+    },
+    {
+      "name": "Content (Teacher)",
+      "description": "Teacher content upload and management"
+    },
+    {
+      "name": "Approval (Principal)",
+      "description": "Principal approval workflow"
+    },
+    {
+      "name": "Broadcast (Public)",
+      "description": "Public student-facing live content endpoints"
+    },
+    {
+      "name": "Users",
+      "description": "User profile and teacher listing"
+    },
+    {
+      "name": "Health",
+      "description": "Server health check"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT token obtained from POST /auth/login"
+      }
+    },
+    "schemas": {
+      "SuccessResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "message": {
+            "type": "string",
+            "example": "Success"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": false
+          },
+          "message": {
+            "type": "string",
+            "example": "Error description"
+          },
+          "errors": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "PaginationMeta": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "example": 1
+          },
+          "limit": {
+            "type": "integer",
+            "example": 20
+          },
+          "total": {
+            "type": "integer",
+            "example": 45
+          },
+          "totalPages": {
+            "type": "integer",
+            "example": 3
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "d1a2b3c4-e5f6-7890-abcd-ef1234567890"
+          },
+          "name": {
+            "type": "string",
+            "example": "Alice Teacher"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "alice@school.com"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "principal",
+              "teacher"
+            ],
+            "example": "teacher"
+          }
+        }
+      },
+      "ContentStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "uploaded"
+        ],
+        "example": "pending"
+      },
+      "ContentItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          },
+          "title": {
+            "type": "string",
+            "example": "Chapter 3 Quiz"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "example": "End of chapter assessment"
+          },
+          "subject": {
+            "type": "string",
+            "example": "maths"
+          },
+          "file_url": {
+            "type": "string",
+            "format": "uri",
+            "example": "http://localhost:3000/uploads/abc123.jpg"
+          },
+          "file_type": {
+            "type": "string",
+            "example": "image/jpeg"
+          },
+          "file_size": {
+            "type": "integer",
+            "description": "Size in bytes",
+            "example": 204800
+          },
+          "original_name": {
+            "type": "string",
+            "example": "quiz-chapter3.jpg"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ContentStatus"
+          },
+          "rejection_reason": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2025-06-01T09:00:00.000Z"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "example": "2025-12-31T18:00:00.000Z"
+          },
+          "rotation_duration": {
+            "type": "integer",
+            "description": "Minutes per rotation slot",
+            "example": 5
+          },
+          "teacher_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "teacher_name": {
+            "type": "string",
+            "example": "Alice Teacher"
+          },
+          "approved_by_name": {
+            "type": "string",
+            "nullable": true,
+            "example": "Principal Admin"
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LiveContentItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "example": "Chapter 3 Quiz"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "subject": {
+            "type": "string",
+            "example": "maths"
+          },
+          "file_url": {
+            "type": "string",
+            "format": "uri",
+            "example": "http://localhost:3000/uploads/abc123.jpg"
+          },
+          "file_type": {
+            "type": "string",
+            "example": "image/jpeg"
+          },
+          "original_name": {
+            "type": "string"
+          },
+          "rotation_order": {
+            "type": "integer",
+            "example": 0
+          },
+          "slot_duration_minutes": {
+            "type": "integer",
+            "example": 5
+          },
+          "active_window": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Authentication token missing or invalid",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "success": false,
+              "message": "Authorization token missing"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Insufficient role permissions",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "success": false,
+              "message": "Role 'teacher' is not permitted to access this resource"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "success": false,
+              "message": "Content not found"
+            }
+          }
+        }
+      },
+      "ValidationError": {
+        "description": "Validation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "success": false,
+              "message": "Validation failed",
+              "errors": [
+                {
+                  "field": "email",
+                  "message": "Valid email required"
+                },
+                {
+                  "field": "password",
+                  "message": "Password must be at least 8 characters"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Rate limit exceeded",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "success": false,
+              "message": "Too many requests, please try again later"
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Server health check",
+        "description": "Returns server status. No authentication required.",
+        "servers": [
+          {
+            "url": "http://localhost:3000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "env": {
+                      "type": "string",
+                      "example": "development"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Register a new teacher",
+        "description": "Creates a new teacher account. Only `teacher` role is allowed via self-registration.\nPrincipal accounts are provisioned via the seed script.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "email",
+                  "password",
+                  "role"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 150,
+                    "example": "Jane Teacher"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "example": "jane@school.com"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "description": "Must contain uppercase, lowercase, and a number",
+                    "example": "Secure@123"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "teacher"
+                    ],
+                    "example": "teacher"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Teacher registered successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/User"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "message": "Registration successful",
+                  "data": {
+                    "id": "d1a2b3c4-e5f6-7890-abcd-ef1234567890",
+                    "name": "Jane Teacher",
+                    "email": "jane@school.com",
+                    "role": "teacher"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email already registered",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": false,
+                  "message": "Email already registered"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Login (any role)",
+        "description": "Authenticates user and returns a JWT token. Valid for 7 days.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "example": "principal@school.com"
+                  },
+                  "password": {
+                    "type": "string",
+                    "example": "Admin@1234"
+                  }
+                }
+              },
+              "examples": {
+                "principal": {
+                  "summary": "Principal login",
+                  "value": {
+                    "email": "principal@school.com",
+                    "password": "Admin@1234"
+                  }
+                },
+                "teacher": {
+                  "summary": "Teacher login",
+                  "value": {
+                    "email": "alice@school.com",
+                    "password": "Teacher@1234"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "type": "string",
+                              "description": "JWT Bearer token",
+                              "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                            },
+                            "user": {
+                              "$ref": "#/components/schemas/User"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": false,
+                  "message": "Invalid email or password"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Get current user info",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authenticated user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/User"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/content": {
+      "post": {
+        "tags": [
+          "Content (Teacher)"
+        ],
+        "summary": "Upload content",
+        "description": "Teacher uploads a new content file (JPG/PNG/GIF, max 10MB).\n\nContent is created with `pending` status and requires principal approval before broadcasting.\n\n**Scheduling:** Content will only appear in live broadcast if **both** `startTime` and `endTime` are set and current time falls within the window.\n",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "subject",
+                  "file"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 255,
+                    "example": "Chapter 3 Quiz"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "example": "maths",
+                    "description": "Case-insensitive. Normalized to lowercase internally."
+                  },
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "JPG, PNG, or GIF. Max 10MB."
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "example": "End of chapter 3 assessment"
+                  },
+                  "startTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "example": "2025-06-01T09:00:00Z",
+                    "description": "ISO 8601. When content becomes visible in broadcast."
+                  },
+                  "endTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "example": "2025-12-31T18:00:00Z",
+                    "description": "ISO 8601. Must be after startTime."
+                  },
+                  "rotationDuration": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1440,
+                    "default": 5,
+                    "example": 5,
+                    "description": "Minutes this content occupies per rotation cycle."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Content uploaded, pending approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "contentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "subject": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "message": "Content uploaded and pending approval",
+                  "data": {
+                    "contentId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "subject": "maths"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "File missing, invalid type, or too large",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "no_file": {
+                    "summary": "No file attached",
+                    "value": {
+                      "success": false,
+                      "message": "File is required"
+                    }
+                  },
+                  "invalid_type": {
+                    "summary": "Wrong file type",
+                    "value": {
+                      "success": false,
+                      "message": "Invalid file type. Allowed: image/jpeg, image/png, image/gif"
+                    }
+                  },
+                  "too_large": {
+                    "summary": "File exceeds 10MB",
+                    "value": {
+                      "success": false,
+                      "message": "File too large. Maximum allowed size is 10MB"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Content (Teacher)"
+        ],
+        "summary": "List content",
+        "description": "- **Teacher**: Returns own content only.\n- **Principal**: Returns all content from all teachers.\n\nSupports filtering by status, subject, and pagination.\n",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/ContentStatus"
+            },
+            "description": "Filter by content status",
+            "example": "pending"
+          },
+          {
+            "name": "subject",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by subject (case-insensitive)",
+            "example": "maths"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "example": 1
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "example": 20
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of content items with pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/ContentItem"
+                              }
+                            },
+                            "pagination": {
+                              "$ref": "#/components/schemas/PaginationMeta"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/content/{id}": {
+      "get": {
+        "tags": [
+          "Content (Teacher)"
+        ],
+        "summary": "Get single content by ID",
+        "description": "Teacher can only fetch own content. Principal can fetch any.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Content detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ContentItem"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Content (Teacher)"
+        ],
+        "summary": "Delete content",
+        "description": "Teacher can delete own content only. Principal can delete any content.\nDeletes file from disk and removes all schedule/slot associations.\n",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Content deleted",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "message": "Content deleted",
+                  "data": {
+                    "contentId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/content/{id}/approve": {
+      "patch": {
+        "tags": [
+          "Approval (Principal)"
+        ],
+        "summary": "Approve content",
+        "description": "Principal approves a `pending` content item.\nApproved content becomes eligible for live broadcasting (subject to time window).\n",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Content approved",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "message": "Content approved",
+                  "data": {
+                    "contentId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "status": "approved"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Content is not in pending state",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": false,
+                  "message": "Cannot approve content with status 'approved'"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/content/{id}/reject": {
+      "patch": {
+        "tags": [
+          "Approval (Principal)"
+        ],
+        "summary": "Reject content",
+        "description": "Principal rejects a `pending` content item. Rejection reason is **required** and visible to the teacher.\n",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "rejectionReason"
+                ],
+                "properties": {
+                  "rejectionReason": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "example": "Image resolution is too low for classroom display"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Content rejected",
+            "content": {
+              "application/json": {
+                "example": {
+                  "success": true,
+                  "message": "Content rejected",
+                  "data": {
+                    "contentId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "status": "rejected"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Content is not in pending state"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          }
+        }
+      }
+    },
+    "/content/live/{teacherId}": {
+      "get": {
+        "tags": [
+          "Broadcast (Public)"
+        ],
+        "summary": "Get all live content for a teacher",
+        "description": "**Public endpoint — no authentication required.**\n\nReturns all currently active content for a teacher, grouped by subject.\n\n### Scheduling / Rotation Logic\nContent is active when ALL conditions are met:\n1. Status is `approved`\n2. Current time is within `start_time` → `end_time` window\n3. It is this item's turn in the rotation cycle\n\n**Rotation algorithm** (stateless, deterministic):\n- `anchor` = earliest `start_time` among active items in subject group\n- `cycle` = sum of all `rotation_duration` values in the group\n- `elapsed` = `(now - anchor) mod cycle`\n- Walk items in `rotation_order` to find which window `elapsed` falls in\n\n### Edge Cases → All return `\"No content available\"`\n- Unknown teacher ID\n- No approved content\n- Approved but outside time window\n- Approved + in-window but another item's rotation slot\n",
+        "parameters": [
+          {
+            "name": "teacherId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Teacher UUID obtained from /users/teachers or auth login",
+            "example": "d1a2b3c4-e5f6-7890-abcd-ef1234567890"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live content per subject, or no content available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "nullable": true,
+                          "type": "object",
+                          "properties": {
+                            "teacher": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "live": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "$ref": "#/components/schemas/LiveContentItem"
+                              },
+                              "description": "Keys are subject names"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "live_content": {
+                    "summary": "Active content returned",
+                    "value": {
+                      "success": true,
+                      "message": "Success",
+                      "data": {
+                        "teacher": {
+                          "id": "d1a2b3c4-e5f6-7890-abcd-ef1234567890",
+                          "name": "Alice Teacher"
+                        },
+                        "live": {
+                          "maths": {
+                            "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                            "title": "Chapter 3 Quiz",
+                            "subject": "maths",
+                            "file_url": "http://localhost:3000/uploads/abc123.jpg",
+                            "file_type": "image/jpeg",
+                            "original_name": "quiz-ch3.jpg",
+                            "rotation_order": 0,
+                            "slot_duration_minutes": 5,
+                            "active_window": {
+                              "start": "2025-06-01T09:00:00.000Z",
+                              "end": "2025-12-31T18:00:00.000Z"
+                            }
+                          },
+                          "science": {
+                            "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+                            "title": "Plant Cell Diagram",
+                            "subject": "science",
+                            "file_url": "http://localhost:3000/uploads/def456.png",
+                            "file_type": "image/png",
+                            "original_name": "plant-cell.png",
+                            "rotation_order": 1,
+                            "slot_duration_minutes": 5,
+                            "active_window": {
+                              "start": "2025-06-01T09:00:00.000Z",
+                              "end": "2025-12-31T18:00:00.000Z"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "no_content": {
+                    "summary": "No content available",
+                    "value": {
+                      "success": true,
+                      "message": "No content available",
+                      "data": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/content/live/{teacherId}/{subject}": {
+      "get": {
+        "tags": [
+          "Broadcast (Public)"
+        ],
+        "summary": "Get live content for specific subject",
+        "description": "**Public endpoint — no authentication required.**\n\nReturns the single currently-active content item for a specific subject under a teacher.\nReturns `\"No content available\"` for invalid subject names (not a 404).\n",
+        "parameters": [
+          {
+            "name": "teacherId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "d1a2b3c4-e5f6-7890-abcd-ef1234567890"
+          },
+          {
+            "name": "subject",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Subject name (case-insensitive)",
+            "example": "maths"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active content for subject or no content",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "live": {
+                    "summary": "Active content",
+                    "value": {
+                      "success": true,
+                      "message": "Success",
+                      "data": {
+                        "teacher": {
+                          "id": "d1a2b3c4-e5f6-7890-abcd-ef1234567890",
+                          "name": "Alice Teacher"
+                        },
+                        "subject": "maths",
+                        "content": {
+                          "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                          "title": "Chapter 3 Quiz",
+                          "subject": "maths",
+                          "file_url": "http://localhost:3000/uploads/abc123.jpg",
+                          "file_type": "image/jpeg",
+                          "slot_duration_minutes": 5,
+                          "active_window": {
+                            "start": "2025-06-01T09:00:00.000Z",
+                            "end": "2025-12-31T18:00:00.000Z"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "no_content": {
+                    "summary": "No content available",
+                    "value": {
+                      "success": true,
+                      "message": "No content available",
+                      "data": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/users/me": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Get own profile",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current user profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/User"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/users/teachers": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "List all teachers",
+        "description": "Principal only. Returns all registered teacher accounts.",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of teacher accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SuccessResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "email": {
+                                "type": "string"
+                              },
+                              "is_active": {
+                                "type": "integer",
+                                "enum": [
+                                  0,
+                                  1
+                                ]
+                              },
+                              "created_at": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "message": "Success",
+                  "data": [
+                    {
+                      "id": "d1a2b3c4-e5f6-7890-abcd-ef1234567890",
+                      "name": "Alice Teacher",
+                      "email": "alice@school.com",
+                      "is_active": 1,
+                      "created_at": "2025-01-15T10:00:00.000Z"
+                    },
+                    {
+                      "id": "e2b3c4d5-f6a7-8901-bcde-f12345678902",
+                      "name": "Bob Teacher",
+                      "email": "bob@school.com",
+                      "is_active": 1,
+                      "created_at": "2025-01-16T10:00:00.000Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    }
+  }
+}
